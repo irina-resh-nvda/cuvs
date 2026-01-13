@@ -33,12 +33,53 @@ Diagnostics:
 # Tweak the clangd parse settings for all files
 CompileFlags:
   Add:
+      # Set C++ Standard to C++20 (Required for mdspan/raft)
+    - "-std=c++20"
+      # Defines from compile_commands.json
+    - "-DCCCL_DISABLE_PDL"
+    - "-DCUB_DISABLE_NAMESPACE_MAGIC"
+    - "-DCUB_IGNORE_NAMESPACE_MAGIC_ERROR"
+    - "-DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE"
+    - "-DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CUDA"
+    - "-DTHRUST_HOST_SYSTEM=THRUST_HOST_SYSTEM_CPP"
+    - "-DTHRUST_IGNORE_ABI_NAMESPACE_ERROR"
+    - "-DRAFT_SYSTEM_LITTLE_ENDIAN=1"
     # report all errors
     - "-ferror-limit=0"
     - "-fmacro-backtrace-limit=0"
     - "-ftemplate-backtrace-limit=0"
     # Skip the CUDA version check
     - "--no-cuda-version-check"
+    # --- Force include utility to fix std::index_sequence in RAFT ---
+     # Path to mock headers
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/.clangd_headers"
+    
+    - "-include"
+    - "utility"
+    - "-include"
+    - "cuda_runtime.h"
+    # --- Dependency Includes (Mapped from /workspace to /home/scratch.ireshodko_gpu) ---
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/internal"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/tests"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/raft-src/cpp/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/raft-build/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/rapids_logger-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/rmm-src/cpp/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/rmm-build/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/cccl-src/thrust"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/cccl-src/cub"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/cccl-src/libcudacxx/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/cuco-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/nvidiacutlass-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/nvidiacutlass-build/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/dlpack-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/hnswlib-src"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/nlohmann_json-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/spdlog-src/include"
+    - "-I/home/scratch.ireshodko_gpu/repos/cuvs_private/cpp/build/_deps/sqlite3-src"
+
+
   Remove:
     # remove gcc's -fcoroutines
     - -fcoroutines

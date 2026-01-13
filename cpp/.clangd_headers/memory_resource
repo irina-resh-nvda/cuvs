@@ -1,0 +1,9 @@
+#pragma once
+#include <utility> // Fix for missing std::index_sequence in RAFT headers
+#include <experimental/memory_resource>
+
+namespace std {
+namespace pmr {
+    using namespace std::experimental::pmr;
+}
+}
