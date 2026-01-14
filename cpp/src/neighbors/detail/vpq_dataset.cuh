@@ -119,6 +119,10 @@ auto train_vq(const raft::resources& res, const vpq_params& params, const Datase
   const ix_t vq_n_centers = params.vq_n_centers;
   const ix_t dim          = dataset.extent(1);
   const ix_t n_rows_train = n_rows * params.vq_kmeans_trainset_fraction;
+  RAFT_LOG_INFO("train_vq: vq_kmeans_trainset_fraction=%f, n_rows=%ld, n_rows_train=%ld",
+                params.vq_kmeans_trainset_fraction,
+                (long)n_rows,
+                (long)n_rows_train);
 
   // Subsample the dataset and transform into the required type if necessary
   auto vq_trainset = util::subsample(res, dataset, n_rows_train);
@@ -178,6 +182,10 @@ auto train_pq(const raft::resources& res,
   const ix_t pq_n_centers = ix_t{1} << pq_bits;
   const ix_t pq_len       = raft::div_rounding_up_safe(dim, pq_dim);
   const ix_t n_rows_train = n_rows * params.pq_kmeans_trainset_fraction;
+  RAFT_LOG_INFO("train_pq: pq_kmeans_trainset_fraction=%f, n_rows=%ld, n_rows_train=%ld",
+                params.pq_kmeans_trainset_fraction,
+                (long)n_rows,
+                (long)n_rows_train);
 
   // Subsample the dataset and transform into the required type if necessary
   auto pq_trainset = transform_data<MathT>(res, util::subsample(res, dataset, n_rows_train));
