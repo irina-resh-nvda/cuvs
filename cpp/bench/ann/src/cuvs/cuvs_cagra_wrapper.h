@@ -187,6 +187,10 @@ class cuvs_cagra : public algo<T>, public algo_gpu {
 
   void build(const T* dataset, size_t nrow) final;
 
+  auto set_base_set_file(const std::string& file) -> size_t override;
+
+  void build_from_base_set_file() override;
+
   void set_search_param(const search_param_base& param, const void* filter_bitset) override;
 
   void set_search_dataset(const T* dataset, size_t nrow) override;
@@ -235,6 +239,12 @@ class cuvs_cagra : public algo<T>, public algo_gpu {
   /** Train the VPQ codebooks and create the CAGRA-Q index sharing the graph of `index_`. */
   void compress_dataset(const T* dataset, size_t nrow);
 
+  /**
+   * The base set arrived already compressed, as a file, so there are no dense rows anywhere in this
+   * run: the graph is built over the compressed rows and `index_` stays empty until `load`.
+   */
+  [[nodiscard]] auto has_compressed_base() const -> bool { return !base_set_file_.empty(); }
+
   // handle_ must go first to make sure it dies last and all memory allocated in pool
   configured_raft_resources handle_{};
   rmm::mr::pinned_host_memory_resource mr_pinned_;
@@ -268,6 +278,7 @@ class cuvs_cagra : public algo<T>, public algo_gpu {
       std::make_shared<std::vector<raft::device_matrix<T, int64_t, raft::row_major>>>();
   std::shared_ptr<cuvs::neighbors::device_vpq_dataset<half, int64_t>> vpq_dataset_;
   std::shared_ptr<cuvs::neighbors::cagra::vpq_f16_index<T, IdxT>> vpq_index_;
+  std::string base_set_file_;
 
   inline rmm::device_async_resource_ref get_mr(AllocatorType mem_type)
   {
@@ -416,6 +427,49 @@ void cuvs_cagra<T, IdxT>::compress_dataset(const T* dataset, size_t nrow)
   need_dataset_update_ = false;
 }
 
+template <typename T, typename IdxT>
+auto cuvs_cagra<T, IdxT>::set_base_set_file(const std::string& file) -> size_t
+{
+  RAFT_EXPECTS(!index_params_.compression.has_value(),
+               "cagra: the base set in '%s' is compressed already; the compression_* parameters ask "
+               "for it to be compressed here and cannot be combined with it.",
+               file.c_str());
+  using compressed_rows = cuvs::neighbors::device_vpq_dataset<half, int64_t>;
+  std::unique_ptr<compressed_rows> loaded;
+  cuvs::preprocessing::quantize::pq::deserialize(handle_, file, &loaded);
+  // dim_ comes from the query set, the compressed rows being unreadable to the benchmark: a
+  // mismatch means the file was compressed from a different dataset than the queries belong to.
+  RAFT_EXPECTS(static_cast<int>(loaded->dim()) == dim_,
+               "cagra: the compressed base set in '%s' has %u dimensions, the queries have %d.",
+               file.c_str(),
+               loaded->dim(),
+               dim_);
+  vpq_dataset_   = std::shared_ptr<compressed_rows>(std::move(loaded));
+  base_set_file_ = file;
+  return static_cast<size_t>(vpq_dataset_->n_rows());
+}
+
+template <typename T, typename IdxT>
+void cuvs_cagra<T, IdxT>::build_from_base_set_file()
+{
+  RAFT_EXPECTS(vpq_dataset_ != nullptr,
+               "cagra: no compressed base set to build from; set_base_set_file() comes first.");
+  RAFT_EXPECTS(index_params_.num_dataset_splits <= 1,
+               "cagra: a compressed base set cannot be combined with num_dataset_splits > 1.");
+  // The compressed build is instantiated for float rows only, which is what a .vpq decodes to.
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<IdxT, uint32_t>) {
+    auto extents = raft::make_extents<int64_t>(vpq_dataset_->n_rows(), vpq_dataset_->dim());
+    auto params  = index_params_.cagra_params(extents, parse_metric_type(metric_));
+    // Leaving graph_build_params as the config set it: only the iterative build can search
+    // compressed rows, and cagra::build says so itself if the config asked for another builder.
+    vpq_index_ = std::make_shared<cuvs::neighbors::cagra::vpq_f16_index<T, IdxT>>(
+      cuvs::neighbors::cagra::build(handle_, params, vpq_dataset_->as_dataset_view()));
+    need_dataset_update_ = false;
+  } else {
+    RAFT_FAIL("cagra: building from a compressed base set is available for float rows only.");
+  }
+}
+
 inline auto allocator_to_string(AllocatorType mem_type) -> std::string
 {
   if (mem_type == AllocatorType::kDevice) {
@@ -432,7 +486,12 @@ template <typename T, typename IdxT>
 void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
                                            const void* filter_bitset)
 {
-  if (index_) { filter_ = make_cuvs_filter(filter_bitset, index_->size()); }
+  // With a compressed base set there is no dense index to take the row count from.
+  if (index_) {
+    filter_ = make_cuvs_filter(filter_bitset, index_->size());
+  } else if (vpq_index_) {
+    filter_ = make_cuvs_filter(filter_bitset, vpq_index_->size());
+  }
   auto sp = dynamic_cast<const search_param&>(param);
   bool needs_dynamic_batcher_update =
     (dynamic_batching_max_batch_size_ != sp.dynamic_batching_max_batch_size) ||
@@ -443,6 +502,9 @@ void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
   dynamic_batching_conservative_dispatch_ = sp.dynamic_batching_conservative_dispatch;
   search_params_                          = sp.p;
   refine_ratio_                           = sp.refine_ratio;
+  RAFT_EXPECTS(!has_compressed_base() || refine_ratio_ <= 1.0f,
+               "cagra: refine_ratio > 1 reranks against the dense rows, which a compressed base set "
+               "does not carry.");
   if (sp.graph_mem != graph_mem_) {
     // Move graph to correct memory space
     graph_mem_ = sp.graph_mem;
@@ -451,8 +513,9 @@ void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
     auto mr = get_mr(graph_mem_);
 
     // Create a new graph, then copy, and __only then__ replace the shared pointer.
-    auto old_graph =
-      index_->graph();  // view of graph_ if it exists, of an internal index member otherwise
+    // View of graph_ if it exists, of an internal index member otherwise. A compressed base set
+    // leaves index_ empty, and then the graph lives in the compressed index.
+    auto old_graph = index_ ? index_->graph() : vpq_index_->graph();
     auto new_graph = raft::make_device_mdarray<IdxT, int64_t>(handle_, mr, old_graph.extents());
     raft::copy(new_graph.data_handle(),
                old_graph.data_handle(),
@@ -462,7 +525,7 @@ void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
     *graph_ = std::move(new_graph);
 
     // NB: update_graph() only stores a view in the index. We need to keep the graph object alive.
-    index_->update_graph(handle_, make_const_mdspan(graph_->view()));
+    if (index_) { index_->update_graph(handle_, make_const_mdspan(graph_->view())); }
     if (vpq_index_) { vpq_index_->update_graph(handle_, make_const_mdspan(graph_->view())); }
     // graph_ owns the graph now, so release the host index that used to own it.
     host_index_.reset();
@@ -470,7 +533,7 @@ void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
   }
 
   // CAGRA-Q searches the compressed rows in vpq_index_, so the dense dataset is never needed.
-  if (!index_params_.compression.has_value() &&
+  if (!index_params_.compression.has_value() && !has_compressed_base() &&
       (sp.dataset_mem != dataset_mem_ || need_dataset_update_)) {
     dataset_mem_ = sp.dataset_mem;
 
@@ -509,6 +572,8 @@ void cuvs_cagra<T, IdxT>::set_search_param(const search_param_base& param,
   if (sp.dynamic_batching) {
     RAFT_EXPECTS(!index_params_.compression.has_value(),
                  "cagra: dynamic batching is not supported together with compression_* (CAGRA-Q).");
+    RAFT_EXPECTS(!has_compressed_base(),
+                 "cagra: dynamic batching is not supported with a compressed base set.");
     if (!dynamic_batcher_ || needs_dynamic_batcher_update) {
       dynamic_batcher_ =
         std::make_shared<cuvs::neighbors::dynamic_batching::index<T, algo_base::index_type>>(
@@ -579,6 +644,12 @@ void cuvs_cagra<T, IdxT>::set_search_dataset(const T* dataset, size_t nrow)
 template <typename T, typename IdxT>
 void cuvs_cagra<T, IdxT>::save(const std::string& file) const
 {
+  if (has_compressed_base()) {
+    // The rows stay in the .vpq file, which the benchmark hands over again before `load`, so
+    // writing them a second time here would only double the bytes on disk and on the device.
+    cuvs::neighbors::cagra::serialize(handle_, file, *vpq_index_, false);
+    return;
+  }
   if (index_params_.num_dataset_splits > 1 &&
       index_params_.merge_type == CagraMergeType::kLogical) {
     for (size_t i = 0; i < sub_indices_.size(); ++i) {
@@ -602,6 +673,21 @@ void cuvs_cagra<T, IdxT>::save_to_hnswlib(const std::string& file) const
 template <typename T, typename IdxT>
 void cuvs_cagra<T, IdxT>::load(const std::string& file)
 {
+  if (has_compressed_base()) {
+    using compressed_rows = cuvs::neighbors::device_vpq_dataset<half, int64_t>;
+    auto loaded           = std::make_shared<cuvs::neighbors::cagra::vpq_f16_index<T, IdxT>>(
+      handle_, parse_metric_type(metric_));
+    std::unique_ptr<compressed_rows> rows_from_index_file;
+    cuvs::neighbors::cagra::deserialize(handle_, file, loaded.get(), &rows_from_index_file);
+    // An index file written elsewhere may carry its own rows; those are the ones its graph was
+    // built over, so they win over the file the benchmark handed us.
+    if (rows_from_index_file) {
+      vpq_dataset_ = std::shared_ptr<compressed_rows>(std::move(rows_from_index_file));
+    }
+    loaded->update_device_dataset_same_layout(handle_, vpq_dataset_->as_dataset_view());
+    vpq_index_ = std::move(loaded);
+    return;
+  }
   std::ifstream meta(file + ".submeta", std::ios::in);
   if (index_params_.num_dataset_splits > 1 &&
       index_params_.merge_type == CagraMergeType::kLogical && meta.good()) {
