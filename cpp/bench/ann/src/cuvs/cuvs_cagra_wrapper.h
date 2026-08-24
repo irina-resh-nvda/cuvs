@@ -39,6 +39,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace cuvs::bench {
@@ -190,6 +191,9 @@ class cuvs_cagra : public algo<T>, public algo_gpu {
   auto set_base_set_file(const std::string& file) -> size_t override;
 
   void build_from_base_set_file() override;
+
+  [[nodiscard]] auto base_set_properties() const
+    -> std::vector<std::pair<std::string, double>> override;
 
   void set_search_param(const search_param_base& param, const void* filter_bitset) override;
 
@@ -468,6 +472,21 @@ void cuvs_cagra<T, IdxT>::build_from_base_set_file()
   } else {
     RAFT_FAIL("cagra: building from a compressed base set is available for float rows only.");
   }
+}
+
+template <typename T, typename IdxT>
+auto cuvs_cagra<T, IdxT>::base_set_properties() const -> std::vector<std::pair<std::string, double>>
+{
+  if (!vpq_dataset_) { return {}; }
+  // Named after the compression_* keys a dense run is configured with, so that both kinds of run
+  // report into the same columns and remain comparable. The last two have no config counterpart:
+  // vq_n_centers is usually left to a heuristic, and the row length follows from the rest, but both
+  // are worth recording since the file is the only place they exist.
+  return {{"build_compression_pq_dim", static_cast<double>(vpq_dataset_->pq_dim())},
+          {"build_compression_pq_bits", static_cast<double>(vpq_dataset_->pq_bits())},
+          {"build_compression_vq_n_centers", static_cast<double>(vpq_dataset_->vq_n_centers())},
+          {"build_compression_encoded_row_length",
+           static_cast<double>(vpq_dataset_->encoded_row_length())}};
 }
 
 inline auto allocator_to_string(AllocatorType mem_type) -> std::string

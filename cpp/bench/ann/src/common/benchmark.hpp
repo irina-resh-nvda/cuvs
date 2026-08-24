@@ -186,6 +186,11 @@ void bench_build(::benchmark::State& state,
     state.counters.insert({"GPU", {gpu_timer.total_time(), benchmark::Counter::kAvgIterations}});
   }
   state.counters.insert({{"index_size", index_size}});
+  // The compression parameters of a compressed base set, which the config cannot state and the
+  // benchmark cannot read: without them a row of results does not say what it was measured on.
+  for (const auto& [key, value] : algo->base_set_properties()) {
+    state.counters.insert({{key, value}});
+  }
 
   if (state.skipped()) { return; }
   make_sure_parent_dir_exists(index.file);

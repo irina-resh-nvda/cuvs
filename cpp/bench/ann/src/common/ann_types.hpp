@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cuvs::bench {
@@ -192,6 +193,21 @@ class algo : public algo_base {
   virtual void build_from_base_set_file()
   {
     throw std::runtime_error{"This algorithm cannot build from a compressed base set."};
+  }
+
+  /**
+   * What the algorithm read out of a compressed base set, reported with the build as counters.
+   *
+   * A dense run takes the compression parameters from its config, where the benchmark can see them;
+   * a compressed one cannot, since they were decided when the file was written and only the
+   * algorithm can read it. Returning them here is what keeps a result attributable to the
+   * quantization it was measured on. Names are the caller's choice, and matching the config keys of
+   * the dense path puts both kinds of run in the same columns.
+   */
+  [[nodiscard]] virtual auto base_set_properties() const
+    -> std::vector<std::pair<std::string, double>>
+  {
+    return {};
   }
 
   /**
