@@ -1109,7 +1109,7 @@ static auto read_serialized_header(cuvsResources_t res, const char *filename)
       "serialization version mismatch, expected %d, got %d",
       cuvs::neighbors::cagra::cagra_serialization_version, version);
   using kind = cuvs::neighbors::cagra::serialized_dataset_kind;
-  RAFT_EXPECTS(dataset_kind_raw <= static_cast<std::uint32_t>(kind::device_vpq_f16),
+  RAFT_EXPECTS(dataset_kind_raw <= static_cast<std::uint32_t>(kind::host_standard),
                "Invalid serialized dataset kind %u in file %s",
                dataset_kind_raw, filename);
   return {output_dtype, static_cast<kind>(dataset_kind_raw)};
@@ -1156,12 +1156,10 @@ void dispatch_serialized_dataset_kind(
       fn.template operator()<
           cuvs::neighbors::device_padded_dataset_view<T, int64_t>>();
       break;
-    case serialized_kind::device_vpq_f16:
-      // A recognised file the C API has no index layout for, as opposed to an unreadable one.
-      // cuvsDatasetLayout_t covers standard and padded only, and every C entry point dispatches
-      // on that layout, so there is nothing here to hand a VPQ index to yet.
-      RAFT_FAIL("File holds a VPQ-compressed (CAGRA-Q) dataset, which the C API has no dataset "
-                "layout for; load it through the C++ API");
+    // Unreachable: read_serialized_header rejects this kind before the dispatch, since
+    // cuvsDatasetLayout_t has no PQ-compressed layout to hand back. Listed only because the switch
+    // is exhaustive and -Wswitch is an error. Delete it when the C API gains the layout.
+    case serialized_kind::device_pq: break;
   }
 }
 
