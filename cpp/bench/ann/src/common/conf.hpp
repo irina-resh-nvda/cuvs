@@ -53,6 +53,17 @@ class configuration {
     // handed to the algorithm instead. Queries stay dense, and `dtype` keeps describing them.
     bool base_compressed{false};
 
+    // Rows to search over, when they are not the rows the index was built from. Empty means they
+    // are: base_file serves both phases, which is every configuration that predates this key.
+    //
+    // The two differ when quantization is a build-time device, not a property of the index: a graph
+    // built over compressed rows can be searched over the dense ones it approximates, which costs
+    // the memory it saved and answers at full precision. It is the same graph either way, so the
+    // rows must be the same rows in the same order -- only their encoding may differ -- and the
+    // dtype above describes whichever of the two is dense.
+    std::string search_base_file{};
+    bool search_base_compressed{false};
+
     // data type of input dataset, possible values ["float", "int8", "uint8"]
     std::string dtype;
 
@@ -124,6 +135,31 @@ class configuration {
       }
     } else {
       dataset_conf_.base_compressed = has_suffix(dataset_conf_.base_file, ".vpq");
+    }
+
+    if (conf.contains("search_base_file")) {
+      dataset_conf_.search_base_file = combine_path(data_prefix, conf.at("search_base_file"));
+      if (conf.contains("search_base_format")) {
+        const auto format = conf.at("search_base_format").get<std::string>();
+        if (format == "vpq") {
+          dataset_conf_.search_base_compressed = true;
+        } else if (format != "dense") {
+          throw std::runtime_error("Unknown search_base_format '" + format +
+                                   "', expected \"vpq\" or \"dense\"");
+        }
+      } else {
+        dataset_conf_.search_base_compressed =
+          has_suffix(dataset_conf_.search_base_file, ".vpq");
+      }
+      if (dataset_conf_.search_base_file == dataset_conf_.base_file) {
+        // Saying it twice is not wrong, but the empty default already means "the same rows", and a
+        // second name for one file invites the two from drifting apart in later edits.
+        dataset_conf_.search_base_file.clear();
+        dataset_conf_.search_base_compressed = dataset_conf_.base_compressed;
+      }
+    } else if (conf.contains("search_base_format")) {
+      throw std::runtime_error("search_base_format without search_base_file: the base set of the "
+                               "search phase is base_file, whose format is base_format");
     }
 
     if (conf.contains("dtype")) {

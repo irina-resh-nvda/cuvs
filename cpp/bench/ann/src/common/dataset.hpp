@@ -158,6 +158,11 @@ struct dataset {
   // path is handed to the algorithm, which is the only thing able to decode it.
   bool base_compressed_;
   blob<DataT> base_set_;
+  // The rows the search phase runs over, when they are not the rows the index was built from. Empty
+  // path and no blob means they are, and every search_* accessor below falls back to the base set.
+  std::string search_base_file_;
+  bool search_base_compressed_;
+  std::optional<blob<DataT>> search_base_set_;
   blob<DataT> query_set_;
   std::optional<blob<bitset_carrier_type>> filter_bitset_;
   std::optional<ground_truth_map<IdxT>> ground_truth_map_;
@@ -197,14 +202,23 @@ struct dataset {
           std::string query_file,
           std::string distance,
           std::optional<std::string> groundtruth_neighbors_file,
-          std::optional<double> filtering_rate = std::nullopt)
+          std::optional<double> filtering_rate = std::nullopt,
+          std::string search_base_file         = {},
+          bool search_base_compressed          = false)
     : name_{std::move(name)},
       distance_{std::move(distance)},
       base_file_{base_file},
       base_compressed_{base_compressed},
       base_set_{base_file, subset_first_row, subset_size},
+      search_base_file_{search_base_file},
+      search_base_compressed_{search_base_file.empty() ? base_compressed : search_base_compressed},
       query_set_{query_file}
   {
+    if (!search_base_file_.empty() && !search_base_compressed_) {
+      // The same subsetting as the base set: the two describe one set of rows in one order, so a
+      // search over a different slice of them would be scoring the wrong neighbours.
+      search_base_set_.emplace(search_base_file_, subset_first_row, subset_size);
+    }
     if (base_compressed_) {
       // Which rows went into the file was decided when it was written, so subsetting here is not
       // merely unsupported: there is nothing left to select from.
@@ -333,6 +347,35 @@ struct dataset {
     std::lock_guard<std::mutex> lock(mutex_);
     auto* r = base_set_.data(memory_type, request_hugepages_2mb);
     cache_dim(base_set_);
+    return r;
+  }
+
+  /** The base set of the search phase: the one the index was built from unless told otherwise. */
+  [[nodiscard]] auto search_base_file() const -> std::string
+  {
+    return search_base_file_.empty() ? base_file_ : search_base_file_;
+  }
+  [[nodiscard]] auto search_base_is_compressed() const -> bool { return search_base_compressed_; }
+  /** True when the search phase reads rows the build never saw in that encoding. */
+  [[nodiscard]] auto has_own_search_base() const -> bool { return !search_base_file_.empty(); }
+
+  [[nodiscard]] auto search_base_set_size() const -> size_t
+  {
+    if (!search_base_set_.has_value()) { return base_set_size(); }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto r = search_base_set_->n_rows();
+    cache_dim(*search_base_set_);
+    return r;
+  }
+
+  [[nodiscard]] auto search_base_set(MemoryType memory_type,
+                                     HugePages request_hugepages_2mb = HugePages::kDisable) const
+    -> const DataT*
+  {
+    if (!search_base_set_.has_value()) { return base_set(memory_type, request_hugepages_2mb); }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto* r = search_base_set_->data(memory_type, request_hugepages_2mb);
+    cache_dim(*search_base_set_);
     return r;
   }
 

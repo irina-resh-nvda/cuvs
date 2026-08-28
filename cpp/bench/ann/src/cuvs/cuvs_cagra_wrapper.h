@@ -649,6 +649,17 @@ void cuvs_cagra<T, IdxT>::set_search_dataset(const T* dataset, size_t nrow)
     need_dataset_update_ = false;
   } else {
     bool is_vpq = index_params_.compression.has_value();
+    // A graph indexes rows by position, so rows attached for the search have to be the rows the
+    // graph was built over. That is trivially true when one run does both, but not when the search
+    // reads a different file than the build did, as it does when a graph built over compressed rows
+    // is searched at full precision.
+    if (index_ && index_->graph().extent(0) > 0) {
+      RAFT_EXPECTS(static_cast<size_t>(index_->graph().extent(0)) == nrow,
+                   "cagra: the search base set has %zu rows but the graph has %zu nodes; the two "
+                   "must be the same rows in the same order",
+                   nrow,
+                   static_cast<size_t>(index_->graph().extent(0)));
+    }
     // It can happen that we are re-using a previous algo object which already has
     // the dataset set. Check if we need update.
     if (static_cast<size_t>(input_dataset_v_->extent(0)) != nrow ||

@@ -262,10 +262,14 @@ void bench_search(::benchmark::State& state,
           create_algo<T>(index.algo, dataset->distance(), dataset->dim(), index.build_param);
         a = ualgo.get();
         // An index built from a compressed base set stores only its graph, so `load` alone would
-        // leave it with nothing to search over. Handing the file over first lets `load` attach the
-        // same rows the graph was built from and return a complete index. The row count it returns
-        // is of no use here; only the build reports that.
-        if (dataset->base_is_compressed()) { a->set_base_set_file(dataset->base_file()); }
+        // leave it with nothing to search over. Handing a compressed file over first lets `load`
+        // attach those rows and return a complete index. The row count it returns is of no use
+        // here; only the build reports that. A dense base set instead goes through
+        // `set_search_dataset` below, which is also how the graph of a compressed build comes to
+        // answer at full precision.
+        if (dataset->search_base_is_compressed()) {
+          a->set_base_set_file(dataset->search_base_file());
+        }
         a->load(index_file);
         current_algo = std::move(ualgo);
       }
@@ -278,16 +282,23 @@ void bench_search(::benchmark::State& state,
     current_algo_props =
       std::make_unique<algo_property>(std::move(parse_algo_property(a->get_preference(), sp_json)));
 
+    // The same properties the build reports, because the two phases can now read different
+    // encodings of one set of rows, and a search row that does not say which it read cannot be
+    // compared with another. Empty unless the rows searched are compressed.
+    for (const auto& [key, value] : a->base_set_properties()) {
+      state.counters.insert({{key, value}});
+    }
+
     // Not a reliable signal for a compressed base set: cuvs_cagra answers true unconditionally,
     // because its index file carries no dataset and the dense rows are re-attached here instead.
-    // There are no dense rows to attach for a compressed base, and the algorithm already has the
+    // There are no dense rows to attach for a compressed one, and the algorithm already has the
     // file from `set_base_set_file` above. An algorithm that truly cannot search without the dense
     // rows, such as CAGRA with refine_ratio > 1, has to reject that combination itself: only it
     // knows which of its search parameters read them.
-    if (search_param->needs_dataset() && !dataset->base_is_compressed()) {
+    if (search_param->needs_dataset() && !dataset->search_base_is_compressed()) {
       try {
-        a->set_search_dataset(dataset->base_set(current_algo_props->dataset_memory_type),
-                              dataset->base_set_size());
+        a->set_search_dataset(dataset->search_base_set(current_algo_props->dataset_memory_type),
+                              dataset->search_base_set_size());
       } catch (const std::exception& ex) {
         state.SkipWithError("The algorithm '" + index.name +
                             "' requires the base set, but it's not available. " +
@@ -567,10 +578,11 @@ void dispatch_benchmark(std::string cmdline,
       ::benchmark::AddCustomContext(key, value);
     }
   }
-  auto& dataset_conf = conf.get_dataset_conf();
-  auto base_file     = dataset_conf.base_file;
-  auto query_file    = dataset_conf.query_file;
-  auto gt_file       = dataset_conf.groundtruth_neighbors_file;
+  auto& dataset_conf    = conf.get_dataset_conf();
+  auto base_file        = dataset_conf.base_file;
+  auto search_base_file = dataset_conf.search_base_file;
+  auto query_file       = dataset_conf.query_file;
+  auto gt_file          = dataset_conf.groundtruth_neighbors_file;
   auto dataset =
     std::make_shared<bench::dataset<T>>(dataset_conf.name,
                                         base_file,
@@ -580,7 +592,9 @@ void dispatch_benchmark(std::string cmdline,
                                         query_file,
                                         dataset_conf.distance,
                                         gt_file,
-                                        search_mode ? dataset_conf.filtering_rate : std::nullopt);
+                                        search_mode ? dataset_conf.filtering_rate : std::nullopt,
+                                        search_base_file,
+                                        dataset_conf.search_base_compressed);
   ::benchmark::AddCustomContext("dataset", dataset_conf.name);
   ::benchmark::AddCustomContext("distance", dataset_conf.distance);
   std::vector<configuration::index>& indices = conf.get_indices();
@@ -610,6 +624,15 @@ void dispatch_benchmark(std::string cmdline,
     std::swap(more_indices, indices);  // update the config in case algorithms need to access it
     register_build<T>(dataset, indices, force_overwrite, no_lap_sync);
   } else if (search_mode) {
+    // Which rows were searched is not deducible from the build's own record once the two can
+    // differ, and it decides whether the distances were exact or quantized.
+    ::benchmark::AddCustomContext("search_base_format",
+                                  dataset->search_base_is_compressed() ? "vpq" : "dense");
+    if (dataset->has_own_search_base()) {
+      log_info("Searching over '%s' rather than the rows the index was built from",
+               dataset->search_base_file().c_str());
+      ::benchmark::AddCustomContext("search_base_file", dataset->search_base_file());
+    }
     if (file_exists(query_file)) {
       log_info("Using the query file '%s'", query_file.c_str());
       ::benchmark::AddCustomContext("max_n_queries", std::to_string(dataset->query_set_size()));
