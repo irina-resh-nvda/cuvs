@@ -719,7 +719,7 @@ RAFT_DEVICE_INLINE_FUNCTION void ws_search_body(
   }
 
   do {
-    ws::SmemStage stage_nbi         = res.res_nbi.popStage();
+    ws::SmemStage stage_nbi         = res.res_nbi.nextStage();
     auto [phase_nbi_w, phase_nbi_r] = ws::bindPhases<2>(stage_nbi);
 
     // Claim the next not-yet-started block. The response arrives asynchronously, so the search of
