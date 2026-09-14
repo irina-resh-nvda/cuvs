@@ -154,9 +154,9 @@ class configured_raft_resources {
   operator const raft::resources&() const noexcept { return *res_; }  // NOLINT
 
   /** Get the main stream */
-  [[nodiscard]] auto get_sync_stream() const noexcept
+  [[nodiscard]] auto get_sync_stream() const noexcept -> cudaStream_t
   {
-    return raft::resource::get_cuda_stream(*res_);
+    return raft::resource::get_cuda_stream(*res_).get();
   }
 
  private:

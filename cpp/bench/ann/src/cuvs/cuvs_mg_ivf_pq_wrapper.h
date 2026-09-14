@@ -51,8 +51,7 @@ class cuvs_mg_ivf_pq : public algo<T>, public algo_gpu {
 
   [[nodiscard]] auto get_sync_stream() const noexcept -> cudaStream_t override
   {
-    auto stream = raft::resource::get_cuda_stream(clique_);
-    return stream;
+    return raft::resource::get_cuda_stream(clique_).get();
   }
 
   [[nodiscard]] auto uses_stream() const noexcept -> bool override { return false; }
