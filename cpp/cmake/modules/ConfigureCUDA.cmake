@@ -20,11 +20,15 @@ endif()
 # Be very strict when compiling with GCC as host compiler (and thus more lenient when compiling with
 # clang)
 if(CMAKE_COMPILER_IS_GNUCXX)
+  # unused-but-set-variable: raft 26.10 changed `get_cuda_stream` to return the header-only
+  # `cuda::stream_ref`, so GCC can now prove that initializing a `stream` local has no side effects
+  # and flags every one that went unused. Around 130 such locals exist across cpp/src, predating the
+  # change. Downgraded to a warning for the same reason deprecated-declarations is.
   list(APPEND CUVS_CXX_FLAGS -Wall -Werror -Wno-unknown-pragmas -Wno-error=deprecated-declarations
-       -Wno-reorder
+       -Wno-error=unused-but-set-variable -Wno-reorder
   )
   list(APPEND CUVS_CUDA_FLAGS
-       -Xcompiler=-Wall,-Werror,-Wno-error=deprecated-declarations,-Wno-reorder
+       -Xcompiler=-Wall,-Werror,-Wno-error=deprecated-declarations,-Wno-error=unused-but-set-variable,-Wno-reorder
   )
 
   # set warnings as errors
