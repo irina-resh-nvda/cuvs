@@ -312,7 +312,7 @@ struct search
                   "single_cta_ws_search::search instantiated for an unsupported type combination");
     (void)sample_filter;  // none_sample_filter: nothing to apply.
 
-    cudaStream_t stream = raft::resource::get_cuda_stream(res);
+    cudaStream_t stream = raft::resource::get_cuda_stream(res).get();
 
     const auto config = single_cta_search::compute_launch_config(
       num_itopk_candidates, itopk_size, static_cast<uint32_t>(thread_block_size));
