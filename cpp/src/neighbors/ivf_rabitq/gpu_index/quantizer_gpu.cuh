@@ -16,6 +16,8 @@
 #include <raft/core/resource/cuda_stream.hpp>
 #include <raft/core/resources.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
+
 #include <cassert>
 #include <cmath>
 #include <cstdint>
