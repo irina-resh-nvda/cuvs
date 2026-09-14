@@ -45,7 +45,21 @@ enum class search_algo {
   /** For small batch sizes. */
   MULTI_CTA    = 1,
   MULTI_KERNEL = 2,
-  AUTO         = 100
+  /**
+   * Warp-specialized variant of SINGLE_CTA with work stealing. Requires an SM 100+ device and a
+   * build that includes the corresponding architecture; never selected by AUTO, so it has to be
+   * requested explicitly (e.g. via `iterative_search_params::algo` for the iterative build).
+   */
+  SINGLE_CTA_WS = 3,
+  /**
+   * Diagnostic only: launches one block per query, as SINGLE_CTA does, with the same block size and
+   * with enough shared memory to be held to the same number of blocks per SM, then returns without
+   * searching. The results are left untouched and carry no meaning. The gap to SINGLE_CTA is the cost
+   * of getting the kernel on and off the device, which is what a work stealing measurement has to be
+   * read against. Never selected by AUTO.
+   */
+  SINGLE_CTA_NOOP = 4,
+  AUTO            = 100
 };
 
 enum class hash_mode { HASH = 0, SMALL = 1, AUTO = 100 };
@@ -154,6 +168,8 @@ namespace graph_build_params {
  * The defaults are tuned for the build loop (e.g. search_width=1,
  * max_iterations=8) and may differ from the regular search defaults.
  *
+ * The inherited `algo` field selects the search kernel used by the build loop; it is the only way
+ * to opt into `search_algo::SINGLE_CTA_WS`, which `search_algo::AUTO` never picks.
  */
 struct iterative_search_params : cuvs::neighbors::cagra::search_params {
   iterative_search_params()

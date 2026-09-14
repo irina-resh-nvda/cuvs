@@ -9,6 +9,7 @@
 #include "search_multi_kernel.cuh"
 #include "search_plan.cuh"
 #include "search_single_cta.cuh"
+#include "search_single_cta_ws.cuh"
 #include <neighbors/detail/cagra/compute_distance-ext.cuh>
 
 #include <raft/core/resource/custom_resource.hpp>
@@ -55,6 +56,26 @@ class factory {
         single_cta_search::
           search<DataT, IndexT, DistanceT, CagraSampleFilterT, SourceIndexT, OutputIndexT>>(
         res, plan, dataset_desc, plan.dim, plan.dataset_size, plan.graph_degree, plan.topk);
+    } else if (plan.algo == search_algo::SINGLE_CTA_WS ||
+               plan.algo == search_algo::SINGLE_CTA_NOOP) {
+      // Both share the SINGLE_CTA_WS plan, so the no-op launch reserves exactly the resources a real
+      // search would.
+      if constexpr (single_cta_ws_search::is_supported_instance_v<DataT,
+                                                                 IndexT,
+                                                                 DistanceT,
+                                                                 CagraSampleFilterT,
+                                                                 SourceIndexT,
+                                                                 OutputIndexT>) {
+        return std::make_unique<
+          single_cta_ws_search::
+            search<DataT, IndexT, DistanceT, CagraSampleFilterT, SourceIndexT, OutputIndexT>>(
+          res, plan, dataset_desc, plan.dim, plan.dataset_size, plan.graph_degree, plan.topk);
+      } else {
+        RAFT_FAIL(
+          "CAGRA SINGLE_CTA_WS search is unavailable: it requires a build that includes an SM 100+ "
+          "architecture and is limited to float data, uint32_t indices, float distances and no "
+          "filtering");
+      }
     } else if (plan.algo == search_algo::MULTI_CTA) {
       return std::make_unique<
         multi_cta_search::

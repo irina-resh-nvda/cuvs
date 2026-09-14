@@ -389,9 +389,16 @@ struct search_plan_impl : public search_plan_impl_base {
                                      ") must be smaller or equal to 1024");
       }
     }
-    if (algo != search_algo::SINGLE_CTA && algo != search_algo::MULTI_CTA &&
+    if (algo != search_algo::SINGLE_CTA && algo != search_algo::SINGLE_CTA_WS &&
+        algo != search_algo::SINGLE_CTA_NOOP && algo != search_algo::MULTI_CTA &&
         algo != search_algo::MULTI_KERNEL) {
       error_message += "An invalid kernel mode has been given: " + std::to_string((int)algo) + "";
+    }
+    if (algo == search_algo::SINGLE_CTA_WS && persistent) {
+      error_message += "`persistent` is not available when 'search_mode' is \"single-cta-ws\"";
+    }
+    if (algo == search_algo::SINGLE_CTA_NOOP && persistent) {
+      error_message += "`persistent` is not available when 'search_mode' is \"single-cta-noop\"";
     }
     if (thread_block_size != 0 && thread_block_size != 64 && thread_block_size != 128 &&
         thread_block_size != 256 && thread_block_size != 512 && thread_block_size != 1024) {

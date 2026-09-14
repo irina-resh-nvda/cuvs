@@ -325,6 +325,24 @@ if(NOT BUILD_CPU_ONLY)
     "${CMAKE_CURRENT_BINARY_DIR}/src/neighbors/detail/cagra/compute_distance.cu" @ONLY
   )
 
+  # The warp-specialized CAGRA search (search_algo::SINGLE_CTA_WS) needs SM 100 features and is
+  # therefore compiled as its own, non-JIT translation unit; its device code is guarded by
+  # __CUDA_ARCH__ so that the file can still be compiled for the other requested architectures.
+  # Builds that do not target SM 100+ leave the algo out entirely, and the factory rejects it.
+  set(CUVS_CAGRA_ENABLE_SINGLE_CTA_WS OFF)
+  foreach(cuvs_cuda_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    string(REGEX MATCH "^[0-9]+" cuvs_cuda_arch_number "${cuvs_cuda_arch}")
+    if(cuvs_cuda_arch_number)
+      if(cuvs_cuda_arch_number GREATER_EQUAL 100)
+        set(CUVS_CAGRA_ENABLE_SINGLE_CTA_WS ON)
+      endif()
+    else()
+      # `native`, `all`, `all-major`: resolved by the compiler, so keep the algo available and let
+      # the runtime device check decide.
+      set(CUVS_CAGRA_ENABLE_SINGLE_CTA_WS ON)
+    endif()
+  endforeach()
+
   set(cuvs_cagra_search_cuda_inst_files
       ${cagra_search_inst_files}
       ${CMAKE_CURRENT_BINARY_DIR}/src/neighbors/detail/cagra/compute_distance.cu
@@ -332,6 +350,7 @@ if(NOT BUILD_CPU_ONLY)
       ${cagra_compute_distance_vpq_inst_files}
       ${cagra_search_multi_cta_inst_files}
       ${cagra_search_single_cta_inst_files}
+      $<$<BOOL:${CUVS_CAGRA_ENABLE_SINGLE_CTA_WS}>:${CMAKE_CURRENT_SOURCE_DIR}/src/neighbors/detail/cagra/search_single_cta_ws_inst.cu>
   )
 
   if(BUILD_MG_ALGOS)
@@ -1521,6 +1540,7 @@ if(NOT BUILD_CPU_ONLY)
     cuvs_objs
     PRIVATE $<$<BOOL:${BUILD_CAGRA_HNSWLIB}>:CUVS_BUILD_CAGRA_HNSWLIB>
             $<$<BOOL:${BUILD_MG_ALGOS}>:CUVS_BUILD_MG_ALGOS> $<$<BOOL:${CUVS_NVTX}>:NVTX_ENABLED>
+            $<$<BOOL:${CUVS_CAGRA_ENABLE_SINGLE_CTA_WS}>:CUVS_CAGRA_ENABLE_SINGLE_CTA_WS>
   )
 
   target_link_libraries(

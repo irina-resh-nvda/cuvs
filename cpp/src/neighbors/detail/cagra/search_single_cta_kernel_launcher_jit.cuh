@@ -64,6 +64,42 @@ inline std::uint64_t cagra_hash_combine(std::uint64_t seed, std::uint64_t value)
   return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
 }
 
+/**
+ * Reports how many blocks of this JIT kernel fit on an SM, once per kernel and launch shape.
+ *
+ * The kernel is compiled without launch bounds, so its register count is whatever the JIT chose, and
+ * that decides residency together with the shared memory. This exists to compare against the
+ * ahead-of-time work-stealing kernel, which is capped at 64 registers and reaches the thread limit.
+ */
+inline void log_kernel_residency(cudaKernel_t kernel, std::uint32_t block_size, std::uint32_t smem)
+{
+  static std::mutex mutex;
+  static std::vector<std::uint64_t> seen;
+  const auto key = cagra_hash_combine(reinterpret_cast<std::uintptr_t>(kernel),
+                                      (std::uint64_t{block_size} << 32) | smem);
+  {
+    std::lock_guard<std::mutex> guard(mutex);
+    if (std::find(seen.begin(), seen.end(), key) != seen.end()) { return; }
+    seen.push_back(key);
+  }
+
+  int blocks_per_sm = 0;
+  if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks_per_sm, kernel, static_cast<int>(block_size), smem) != cudaSuccess) {
+    return;
+  }
+  cudaFuncAttributes attrs{};
+  if (cudaFuncGetAttributes(&attrs, kernel) != cudaSuccess) { return; }
+  RAFT_LOG_INFO("CAGRA single-CTA JIT kernel: %u threads/block, %u B dynamic shared memory, "
+                "%d registers/thread, %zu B local frame, %d blocks/SM (%d threads/SM)",
+                block_size,
+                smem,
+                attrs.numRegs,
+                static_cast<std::size_t>(attrs.localSizeBytes),
+                blocks_per_sm,
+                blocks_per_sm * static_cast<int>(block_size));
+}
+
 template <typename SampleFilterT>
 std::uint64_t cagra_udf_source_hash(const SampleFilterT& sample_filter)
 {
@@ -885,6 +921,12 @@ void select_and_run(
     const uint32_t max_iterations_u32            = static_cast<uint32_t>(ps.max_iterations);
     const unsigned num_random_samplings_u        = static_cast<unsigned>(ps.num_random_samplings);
 
+    // gridDim.y is capped at 65535, so a batch larger than that cannot be launched this way.
+    RAFT_EXPECTS(num_queries <= 65535u,
+                 "The single-CTA CAGRA search puts queries on gridDim.y, which the hardware limits "
+                 "to 65535; %u queries were requested in one batch. Lower search_params::max_queries.",
+                 num_queries);
+
     dim3 grid(1, num_queries, 1);
     dim3 block(block_size, 1, 1);
 
@@ -892,6 +934,7 @@ void select_and_run(
                    block_size,
                    num_queries,
                    smem_size);
+    log_kernel_residency(launcher->get_kernel(), block_size, smem_size);
 
     // Dispatch kernel via launcher
     auto kernel_launcher = [&]() -> void {
