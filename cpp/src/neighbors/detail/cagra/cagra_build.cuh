@@ -2279,7 +2279,7 @@ void reconstruct_vpq_queries(raft::resources const& res,
                dim);
 
   kern_reconstruct_vpq_queries<T, MathT>
-    <<<batch_size, threads, 0, raft::resource::get_cuda_stream(res)>>>(
+    <<<batch_size, threads, 0, raft::resource::get_cuda_stream(res).get()>>>(
       vpq_dset.data.data_handle(),
       vpq_dset.encoded_row_length(),
       vpq_dset.vq_code_book.data_handle(),
